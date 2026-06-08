@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="230" viewBox="0 0 720 230">
+  <!-- layout: left label column 0..150, timeline area starts at x=160.
+       unit width = 50px. row1 = 10 units (prefill 1 + decode 9) => 160..660.
+       row2 = 2 units (prefill 1 + read 1) => 160..260. -->
+
+  <!-- ===== Row 1 ===== -->
+  <text x="20" y="62" font-family="Roboto, sans-serif" font-size="14" fill="#222222">model card</text>
+  <text x="20" y="80" font-family="Roboto, sans-serif" font-size="14" fill="#222222">generate()</text>
+
+  <!-- prefill -->
+  <rect x="160" y="45" width="50" height="30" fill="#9fcccc"/>
+  <text x="185" y="64" font-family="Roboto, sans-serif" font-size="12" fill="#222222" text-anchor="middle">prefill</text>
+
+  <!-- nine decode segments -->
+  <rect x="210" y="45" width="48" height="30" fill="#cccccc" stroke="#ffffff" stroke-width="1"/>
+  <rect x="260" y="45" width="48" height="30" fill="#cccccc" stroke="#ffffff" stroke-width="1"/>
+  <rect x="310" y="45" width="48" height="30" fill="#cccccc" stroke="#ffffff" stroke-width="1"/>
+  <rect x="360" y="45" width="48" height="30" fill="#cccccc" stroke="#ffffff" stroke-width="1"/>
+  <rect x="410" y="45" width="48" height="30" fill="#cccccc" stroke="#ffffff" stroke-width="1"/>
+  <rect x="460" y="45" width="48" height="30" fill="#cccccc" stroke="#ffffff" stroke-width="1"/>
+  <rect x="510" y="45" width="48" height="30" fill="#cccccc" stroke="#ffffff" stroke-width="1"/>
+  <rect x="560" y="45" width="48" height="30" fill="#cccccc" stroke="#ffffff" stroke-width="1"/>
+  <rect x="610" y="45" width="48" height="30" fill="#cccccc" stroke="#ffffff" stroke-width="1"/>
+
+  <!-- brace spanning the nine decode segments (210..660) -->
+  <path d="M210 82 L210 90 L432 90 L432 96 L432 90 L660 90 L660 82"
+        fill="none" stroke="#888888" stroke-width="1"/>
+  <text x="435" y="112" font-family="Roboto, sans-serif" font-size="12" fill="#222222" text-anchor="middle">decode × 9   (one forward pass each)</text>
+
+  <!-- ===== Row 2 ===== -->
+  <text x="20" y="160" font-family="Roboto, sans-serif" font-size="14" fill="#222222">forced prefix (L1)</text>
+
+  <!-- prefill -->
+  <rect x="160" y="143" width="50" height="30" fill="#9fcccc"/>
+  <text x="185" y="162" font-family="Roboto, sans-serif" font-size="12" fill="#222222" text-anchor="middle">prefill</text>
+  <!-- read -->
+  <rect x="210" y="143" width="50" height="30" fill="#2a7f7f"/>
+  <text x="235" y="162" font-family="Roboto, sans-serif" font-size="12" fill="#ffffff" text-anchor="middle">read</text>
+
+  <!-- ===== dashed reference lines + double arrow ===== -->
+  <!-- right end of row 2 at x=260 -->
+  <line x1="260" y1="40" x2="260" y2="200" stroke="#888888" stroke-width="1" stroke-dasharray="4 3"/>
+  <!-- right end of row 1 at x=660 -->
+  <line x1="660" y1="40" x2="660" y2="200" stroke="#888888" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- horizontal double arrow between them, y=190 -->
+  <line x1="260" y1="190" x2="660" y2="190" stroke="#888888" stroke-width="1.2"/>
+  <polygon points="260,190 270,185 270,195" fill="#888888"/>
+  <polygon points="660,190 650,185 650,195" fill="#888888"/>
+  <text x="460" y="183" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="middle">work L1 removes</text>
+</svg>

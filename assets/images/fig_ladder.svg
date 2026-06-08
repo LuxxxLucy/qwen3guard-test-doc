@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="270" viewBox="0 0 700 270">
+  <!-- title -->
+  <text x="20" y="28" font-family="Roboto, sans-serif" font-size="14" fill="#222222">PyTorch fp32, one CPU, per-call latency</text>
+
+  <!-- bar area: x0=200, scale = 420/2148 = 0.19553 px per ms.
+       L0 2148 -> 420.0  end 620.0
+       L1  688 -> 134.5  end 334.5
+       L2  555 -> 108.5  end 308.5
+       L3  408 ->  79.8  end 279.8
+       ref 129 ->  25.2  x = 225.2 -->
+
+  <!-- rows: y top for each bar; bar height 26, spacing 50 -->
+  <!-- L0 -->
+  <text x="190" y="73" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">L0  generate()</text>
+  <rect x="200" y="58" width="420.0" height="26" fill="#888888"/>
+  <text x="628" y="76" font-family="Roboto, sans-serif" font-size="13" fill="#222222">2148 ms</text>
+
+  <!-- L1 -->
+  <text x="190" y="123" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">+L1  stop decoding</text>
+  <rect x="200" y="108" width="134.5" height="26" fill="#2a7f7f"/>
+  <text x="342" y="126" font-family="Roboto, sans-serif" font-size="13" fill="#222222">688 ms</text>
+
+  <!-- L2 -->
+  <text x="190" y="173" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">+L2  last position</text>
+  <rect x="200" y="158" width="108.5" height="26" fill="#2a7f7f"/>
+  <text x="316" y="176" font-family="Roboto, sans-serif" font-size="13" fill="#222222">555 ms</text>
+
+  <!-- L3 -->
+  <text x="190" y="223" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">+L3  cache prompt</text>
+  <rect x="200" y="208" width="79.8" height="26" fill="#2a7f7f"/>
+  <text x="287" y="226" font-family="Roboto, sans-serif" font-size="13" fill="#222222">408 ms</text>
+
+  <!-- reference line at value 129 -->
+  <line x1="225.2" y1="48" x2="225.2" y2="236" stroke="#cccccc" stroke-width="1" stroke-dasharray="4 3"/>
+  <text x="231" y="250" font-family="Roboto, sans-serif" font-size="11" fill="#aaaaaa">llama.cpp q8_0 +L3 = 129 ms  (quantized, separate lever)</text>
+
+  <!-- x-axis label -->
+  <text x="410" y="269" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="middle">per-call latency, milliseconds  (lower is better)</text>
+</svg>
