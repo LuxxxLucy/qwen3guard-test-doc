@@ -251,8 +251,10 @@
     set footnote.entry(separator: [], clearance: 0pt, gap: 0pt)
     show footnote.entry: hide
 
-    if cfg.link.underline { show link: underline }
-    show link: set text(fill: cfg.link.fill)
+    show link: it => {
+        set text(fill: cfg.link.fill)
+        if cfg.link.underline { underline(it) } else { it }
+    }
 
     set math.equation(numbering: "(1)")
     set raw(theme: none)

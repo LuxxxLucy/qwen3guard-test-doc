@@ -4,6 +4,9 @@ cd "$(dirname "$0")"
 
 FONTS=vendor/dual-typst/assets/fonts
 
+# Render the cetz stage-ladder figures to figures/output/*.svg first.
+figures/build.sh
+
 # PDF
 typst compile --root . --font-path "$FONTS" \
     main.typ main.pdf &

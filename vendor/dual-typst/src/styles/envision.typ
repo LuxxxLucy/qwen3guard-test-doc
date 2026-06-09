@@ -4,6 +4,7 @@
 
 #import "../config.typ": merge-config
 #import "_stacks.typ" as stacks
+#import "_html_overlay.typ": link-rules
 #import "tufte-original.typ": tufte-original
 
 #let envision = merge-config(tufte-original, (
@@ -25,9 +26,14 @@
     title-block: (font: stacks.roboto-condensed, size: 1.32em, meta-size: 0.8em, meta-style: "normal", v-after: 1.0em),
     text: (fill: rgb("#2B2B2B"), leading: 0.44em),
     quote: (size: 0.95em, leading: 0.44em, inset: (left: 1.7em, right: 1em, top: 0.9em, bottom: 0.75em)),
-    link: (fill: rgb("#222222"), underline: true),
+    link: (fill: rgb("#222222")),
     raw-block: (size: 0.82em, leading: 0.22em, inset: (left: 1.6em, right: 0.8em, top: 0.42em, bottom: 0.42em)),
     "html-vendor-css-only": true,
+    // tufte-css underlines links with a background-gradient trick calibrated
+    // for et-book; under Roboto Condensed it renders as a strikethrough.
+    // Replace it with a plain font-aware underline (same shared rule the
+    // overlay styles use). Emitted after the vendored CSS, so it wins.
+    "html-extra-css": link-rules(link: "#222222", link-underline: true),
     css: (
         "https://cdnjs.cloudflare.com/ajax/libs/tufte-css/1.8.0/tufte.min.css",
         "https://cdn.jsdelivr.net/gh/rstudio/tufte@main/inst/rmarkdown/templates/tufte_html/resources/envisioned.css",

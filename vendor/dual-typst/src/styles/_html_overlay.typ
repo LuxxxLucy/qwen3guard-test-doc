@@ -1,6 +1,22 @@
 // Per-style HTML overlay on top of canonical tufte-css. The result is
 // inlined into <head>; tufte-css supplies geometry, this layer paints.
 
+// Link normalization shared by every style. tufte-css paints links with a
+// background-gradient underline plus a white text-shadow mask, calibrated for
+// et-book; under any other font (e.g. envision's Roboto Condensed) it renders
+// as an illegible strikethrough. Strip both, restore a plain hover underline.
+// Emitted after the vendored CSS so source order makes it win.
+#let link-rules(link: "#0066cc", link-underline: false) = {
+    let link-deco = if link-underline { "underline" } else { "none" }
+    let link-hover = if link-underline { "" } else { "a:hover { text-decoration: underline; }" }
+    (
+        "a:link, a:visited { color: " + link + "; text-shadow: none;"
+        + " background-image: none; text-decoration: " + link-deco + ";"
+        + " text-decoration-skip-ink: auto; text-underline-offset: 0.15em; }"
+        + link-hover
+    )
+}
+
 #let html-overlay(
     import-css: "",
     body-font: "Georgia, serif",
@@ -21,8 +37,6 @@
     let h-font = if heading-font == none { body-font } else { heading-font }
     let h-color = if heading-color == none { fg } else { heading-color }
     let n-color = if note-color == none { fg } else { note-color }
-    let link-deco = if link-underline { "underline" } else { "none" }
-    let link-hover = if link-underline { "" } else { "a:hover { text-decoration: underline; }" }
     (
         import-css
         + "html { background-color: " + bg + "; }"
@@ -50,10 +64,7 @@
         + " label.margin-toggle, input.margin-toggle { display: inline; }"
         + "}"
         + "code, pre, .code, kbd, samp { font-family: " + mono-font + "; }"
-        + "a:link, a:visited { color: " + link + "; text-shadow: none;"
-        + " background-image: none; text-decoration: " + link-deco + ";"
-        + " text-decoration-skip-ink: auto; text-underline-offset: 0.15em; }"
-        + link-hover
+        + link-rules(link: link, link-underline: link-underline)
         + " article blockquote footer { display: block; text-align: right; white-space: normal; overflow-wrap: anywhere; }"
         + " article blockquote, article blockquote p {"
         + " font-size: " + quote-size + "; line-height: " + quote-line-height + "; }"

@@ -4,194 +4,208 @@
   epigraph, new-thought, full-width, sans, diagram,
 )
 
+// SEO metadata for the HTML page (see the homepage repo's AGENTS.md). One
+// description string, reused across meta/og/twitter and JSON-LD. The og:image
+// is the homepage cover, referenced absolutely so it resolves off-site.
+#let _is-html = sys.inputs.at("target", default: "pdf") == "html"
+#let _seo-title = "Some (too-)simple tricks for running a generative classifier (on CPU)"
+#let _seo-desc = "Three serving tricks (forced prefix, LM-head trimming, KV cache) speed up the Qwen3Guard generative safety classifier 8.5x on CPU, at identical fp32 verdicts."
+#let _seo-url = "https://luxxxlucy.github.io/qwen3guard-test-doc/"
+#let _seo-img = "https://luxxxlucy.github.io/projects/2026_qwen3guard_classifier/cover.png"
+#let _seo-date = "2026-06-08"
+#let _seo-jsonld = "{\"@context\":\"https://schema.org\",\"@type\":\"BlogPosting\",\"headline\":\"" + _seo-title + "\",\"description\":\"" + _seo-desc + "\",\"url\":\"" + _seo-url + "\",\"image\":\"" + _seo-img + "\",\"datePublished\":\"" + _seo-date + "\",\"dateModified\":\"" + _seo-date + "\",\"author\":{\"@type\":\"Person\",\"@id\":\"https://luxxxlucy.github.io/#jialin-lu\",\"name\":\"Jialin Lu\",\"url\":\"https://luxxxlucy.github.io/\"}}"
+#let _seo-head() = {
+  html.elem("meta", attrs: (("name"): "description", ("content"): _seo-desc))[]
+  html.elem("meta", attrs: (("name"): "author", ("content"): "Jialin Lu"))[]
+  html.elem("link", attrs: (("rel"): "canonical", ("href"): _seo-url))[]
+  html.elem("meta", attrs: (("property"): "og:type", ("content"): "article"))[]
+  html.elem("meta", attrs: (("property"): "og:title", ("content"): _seo-title))[]
+  html.elem("meta", attrs: (("property"): "og:description", ("content"): _seo-desc))[]
+  html.elem("meta", attrs: (("property"): "og:url", ("content"): _seo-url))[]
+  html.elem("meta", attrs: (("property"): "og:image", ("content"): _seo-img))[]
+  html.elem("meta", attrs: (("property"): "article:published_time", ("content"): _seo-date))[]
+  html.elem("meta", attrs: (("property"): "article:author", ("content"): "https://luxxxlucy.github.io/"))[]
+  html.elem("meta", attrs: (("name"): "twitter:card", ("content"): "summary_large_image"))[]
+  html.elem("meta", attrs: (("name"): "twitter:creator", ("content"): "@JIALIN_LU_1996"))[]
+  html.elem("meta", attrs: (("name"): "twitter:title", ("content"): _seo-title))[]
+  html.elem("meta", attrs: (("name"): "twitter:description", ("content"): _seo-desc))[]
+  html.elem("meta", attrs: (("name"): "twitter:image", ("content"): _seo-img))[]
+  html.elem("script", attrs: (("type"): "application/ld+json"))[#[#set smartquote(enabled: false); #_seo-jsonld]]
+}
+
 #show: tufte.with(
-  title: [Generative classifiers are just language models: some simple tricks],
+  title: [Some (too-)simple tricks for running a generative classifier (on CPU)],
   author: "Jialin Lu",
   date: "2026-06-08",
   abstract: [
-    A generative classifier is a language model fine-tuned to write down a label.
-    It is a good way to build a classifier and a slow way to run one.
-    Qwen3Guard-Gen-0.6B, run the way its model card shows, takes about two seconds per call on a CPU.
-    Three small changes bring that to about 250 milliseconds, and the labels do not change.
-    None of the three is new: they are the usual tricks for serving a language model, and they apply here because a generative classifier is one.
   ],
-  toc: true,
+  toc: false,
   style: "envision",
-  bib: bibliography("refs.bib", style: "chicago-author-date"),
+  head-extra: if _is-html { _seo-head() } else { none },
 )
 
-We want to check text for safety: read each message and label it safe, unsafe, or controversial.
-It runs on every message, so it has to be cheap.
-A common way to build it today is to take a language model and fine-tune it to answer with the label.
-That works well but runs slowly: the model writes a whole sentence to tell us one word.
+#marginnote[Code: #link("https://github.com/LuxxxLucy/qwen3guard-test")[github.com/LuxxxLucy/qwen3guard-test]]
 
-This post is about getting the word without the sentence.
-We will say exactly what such a model computes, find the work that does not change the answer, and remove it.
-If you serve language models already, the fixes will look familiar.
-The running example is Qwen3Guard-Gen-0.6B#sidecite(<qwen3guard>) on a CPU, the realistic place to run a sub-billion-parameter model at batch one.
-There the model-card path takes about two seconds per call, and the fast path takes about 250 milliseconds.
-
-= Two ways to build a classifier
-
-A classifier takes an input and returns one of $K$ labels; here $K = 3$.
-There are two ways to build one.
-
-The standard way is a small head on top of an encoder.
-The encoder turns the input $x$ into a vector $h(x) in RR^d$.
-A linear layer of $K$ units turns that into $K$ scores, and a softmax turns the scores into a distribution over the labels,
-
-$ p(y = k mid x) = exp(w_k^top h(x)) / (sum_(j=1)^K exp(w_j^top h(x))), quad W in RR^(K times d). $ <eq-disc>
-
-You train $W$ and the encoder on labelled data with cross-entropy, and that is the whole model.
-This is a BERT-style text classifier: small, fast, and for many tasks the right choice.#sidecite(<promptguard>)
-
-The second way, common lately for content safety, is to take a pretrained, instruction-tuned language model and fine-tune it to write the label as text.
-Llama Guard#sidecite(<llamaguard>), ShieldGemma#sidecite(<shieldgemma>), and Qwen3Guard#sidecite(<qwen3guard>) all do this.
-You give the model a chat prompt and it generates
-
-#figure(
-  ```
-  Safety: Unsafe
-  Categories: Violent
-  ```,
-  caption: [The model card's output format. The label is the word after `Safety:`.],
-)
-
-and you read the word after `Safety:`.
-I will call this a _generative classifier_, to set it apart from the head above.
-
-Running a few-hundred-million-parameter model to choose among three labels is a lot of computation, so why do it this way?
-Because the pretrained model already knows a lot about language and the world, in many languages.
-A head trained from scratch knows only the labels it was shown.
-The generative classifier also lets you keep the policy in the prompt: the list of what counts as unsafe lives in the system prompt, not the weights, so you change it by editing text instead of retraining.#sidenote[Alibaba ship a strict and a loose Qwen3Guard from the same weights and different system wording. A from-scratch classifier cannot do that; changing its label set means training a new one.]
-So the generative classifier is often the right tradeoff.
-As usually run, it is just not fast.
-To fix that, we first say exactly what it computes.
-
-= What the model computes
-
-A language model does not have the head from @eq-disc.
-It has a _language-modeling head_, the same kind of linear layer as $W$, only much wider.
-At each position $t$ it projects the hidden state onto one score per vocabulary token, giving a distribution over the whole vocabulary $cal(V)$ for the next token,
-
-$ p(x_(t+1) = v mid x_(<=t)) = exp(E_v^top h_t) / (sum_(u in cal(V)) exp(E_u^top h_t)), quad E in RR^(abs(cal(V)) times d). $ <eq-lm>
-
-Here $h_t$ is the hidden state at position $t$, and $E$ is that wide projection, one row per vocabulary token.
-The vocabulary is large: for Qwen3 it is about 150,000 tokens.
-That is the wrong shape for a classifier, a distribution over 150,000 tokens instead of over $K = 3$ labels.
-
-But the labels are tokens too.
-`safe`, `unsafe`, and `controversial` are each a single token; call their ids $i_1, i_2, i_3$.
-End the prompt so that the next token the model would write is the verdict, by ending it with `Safety: ` (more on that below).
-Then read @eq-lm at that one position, keep only those three logits, and renormalize:
-
-$ p(y = k mid x) = exp(E_(i_k)^top h_t) / (sum_(j=1)^K exp(E_(i_j)^top h_t)). $ <eq-cast>
-
-Put @eq-cast next to @eq-disc and they are the same computation.
-We did not add a classification head; the head was already there, as the three rows $E_(i_1), E_(i_2), E_(i_3)$ of the language-modeling head.
-We just read those three rows, at one position.
-
-#figure(
-  image("/assets/images/fig_cast.svg", width: 100%),
-  caption: [
-    Classification as a distribution: pick the three label tokens out of the next-token distribution over the whole vocabulary, and renormalize.
-    The classification head is three rows of the language-modeling head.
-  ],
-)
-
-The chat template and the literal `Safety: ` are there only to put the model in the state where its next token is the verdict.
-They are not part of the answer.
-So the whole job is one read:
-
-#quote(block: true)[
-  Classification reads the next-token distribution at one position, over $K$ tokens, after a fixed prompt.
+*TL;DR*:
+So this blog happens as one of my colleagues was trying to assess the qwen3guard model#marginnote[Qwen3Guard is an (autoregressive) language model that outputs text, which is finetuned on safety corpus and reframed as a classifier.]
+for whether it is of practical merits for scanning LLM prompts (our usecase).
+The results on in-house evals seem relatively good,
+but then he complained that this is just too slow to be useful
+in our usecase#marginnote[He adapted the original inference snippets in the README (see #link("https://github.com/QwenLM/Qwen3Guard/blob/main/README.md#L68-L102")[here]).
+Also we do need to mention that we do not have GPUs in our usecase.
+In my experience, less than 0.8~1B model should actually run faster
+on CPU anyway so it should be fine.
+(caveat: not always, but mostly).
 ]
 
-Anything the model does beyond that read does not change the label.
+I then start digging into it and found that there are some really easy opportunities,
+like maybe if you read some basics of LLM inference you shall really not miss it.#marginnote[I only started reading LLM inference recently (like 2 months ago, when I realized that even in serving the same open source models, somehow some providers can make it much faster than others).]
+But anyway I will lay down these really simple and apparent tricks here,
+and the results are pretty good: we can get about 8.5x speedup on CPU (across different runtimes and similarly in GPU as well) with the same full precision fp32 model,
+and quantization can further halve the latency.
+
+= A classifier of text
+
+The task we consider is simple,
+we read a string of text and we want to label it as one of the 3 categories: safe, unsafe, or controversial.
+
+In an oversimplified textbook setting,
+this classifier would be defined as a function $f$ that takes an input $x$ and turns it into a vector of (unnormalized) scores $f(x)$ with the dimension being $K$ (here $K = 3$).
+A softmax turns the scores into a proxy of probability for each label, and the largest is the prediction:
+
+$ p(y = k | x) = exp(f(x)_k) / (sum_(j=1)^K exp(f(x)_j)) $ <eq-disc>
+
+
+The case of a generative classifier is different though.
+As the name suggests, it uses a *generative* model of text.
+It instead re-uses an autoregressive language model,
+that takes an input string and extends it via next-token prediction so we have more text generated and concatenated in the end.
+Once the generation is done, we search the generated text,
+if the word "safe" existed in the generated text, then we label it as "safe".
+Of course, this means the model would have good prompts and finetuning so that this instruction spec is followed.
+
+We need to note that several models use this recipe, such as
+Llama Guard#sidecite(<llamaguard>), ShieldGemma#sidecite(<shieldgemma>), and Qwen3Guard#sidecite(<qwen3guard>).
+I think
+the main reason for this design is that we can assume that the base model is already pretrained on a lot of language and world knowledge,
+so it has the capacity to be used as a good and robust (i.e. generalizable) classifier with just a little tuning.
+
+One additional advantage, that makes it particularly interesting, is the user experience:
+Now we can write human language for what is considered unsafe, a.k.a in-context learning, as part of the prompt.
+This makes especially the network administrator happy as now finally in all these years they can write policies in an easy way,
+and that this policy can also change on the fly without retraining the model, which is a huge plus.
+
+= Analysis, breakdowns and tricks
+
+So we have an autoregressive language model, reframed as a classifier.
+Now let us take a closer look at the default way of how this model is used:
+#marginnote[
+  From the hugging face readme, the default way to use the model is to call `generate()` with a prompt that includes the system prompt and the chat template, and then parse the generated text to get the verdict.
+]
+
+#block(
+  width: 100%,
+  fill: luma(248),
+  stroke: 0.5pt + luma(218),
+  radius: 3pt,
+  inset: (x: 6pt, y: 2pt),
+)[
+  #set text(size: 6.5pt)
+  ```
+  input
+   → render chat template
+   → prefill              1 forward pass over the whole prompt
+   → decode × 9 steps     1 forward pass per token: "Safety: unsafe\nCategories: …"
+   → regex-parse the text
+   → verdict (+ categories)
+  ```
+]
+
+If we look closely enough we will understand that something is off, there is redundant computation here.
+
+== L1: forced prefix
+
+Our first instinct is that the 
+model writes `Safety: ` before the verdict anyway, so generating it is wasted work.
+In fact, this can be seen as an extreme version of constrained decoding, like we already know (and actually finetuned the model to do this), this makes the additional decoding work for generating `Safety: ` really unnecessary.
+
+We can fix it simply by enforcing this part of the text instead,
+which we call prefix enforcing.
+We can simply treat it as if it is part of the input: append `Safety: ` to the prompt, run one forward pass, and read the next-token distribution at the last position.
+The entirety of the decoding step is removed and now it becomes part of the prefill.
+
+If we only want the verdict we can stop here; the `Categories:` line never needs to be decoded.
+In fact we know in real traffic, the benign samples must outnumber the malicious samples by several magnitudes, so we can even just check for `Safety: unsafe` and skip the `Categories:` line entirely (make the latter part only conditional compute).
+In this way,
+even more of the decode loop is eliminated: we need now only one forward pass instead of about ten.#sidenote[ShieldGemma's card publishes the identical recipe; Llama Guard's is the first-token-logit variant. The model would write `Safety: unsafe`, then a `Categories:` line, about nine tokens, so `generate()` runs about ten forward passes.]
 
 #figure(
-  image("/assets/images/fig_model.svg", width: 100%),
+  image("/figures/src/fig_timeline.svg", width: 100%),
   caption: [
-    An autoregressive language model used as a classifier: the whole prompt runs through, but the verdict is one read at the last position.
+    `generate()` runs a prefill pass then nine decode steps, one forward pass each; the forced-prefix path runs one prefill and reads the verdict, since the label is fixed by the end of the first step.
   ],
 )
 
-= Where the time goes
 
-We need one read. The model-card path does much more, and the gap is where the time goes.
+== L2: LM-head trimming
 
-That path renders the chat prompt, calls `generate()`, and parses the text it gets back.
-The call is a _prefill_ pass over the $N$ prompt tokens, then a _decode loop_ that writes the output one token at a time, each token its own forward pass.
-Qwen3Guard writes about nine tokens before the line we want is done,#sidenote[`Safety: Unsafe`, then the `Categories:` line it was fine-tuned to always add.] so the decode loop runs about nine times.
-We pay for about ten forward passes, one prefill and nine decode, when we need one.
-Each forward pass on a small model does little math but carries a fixed overhead, so nine in a row is most of the time.
-On a CPU that is the gap between two seconds and a fifth of a second.
+We still have more redundant computation.
+
+Here we refer to `lm_head` as the final MLP layer that projects the final embedding into the token logit space. If we have a text of length $N+1$, then this means we need to project every one of the $N$ positions onto the full 150,000-token vocabulary, but really that is not needed.
+
+I am actually surprised to find that this is the default behavior, but then I understand that PyTorch is ultimately a framework for training and this is actually needed and makes sense.
+But in inference this is not really needed in two perspectives:
+1. first, we only care about the last position, so the projections at the other positions are wasted work. Only $1$ of the $N$ is needed#sidenote[In PyTorch this is `logits_to_keep=1`; in ONNX a slice node on the graph; llama.cpp and most runtimes already return only the last position.].
+2. Even for that one last position, we are actually only interested in the three label tokens, so projecting onto the whole vocabulary is also wasted work. Only $3$ of the $150,000$ are needed.
+
+I mean this seems really obvious and really small, but when we talk about this 0.6B model, this is really wasted compute that cannot and should not be ignored.
 
 #figure(
-  image("/assets/images/fig_timeline.svg", width: 100%),
+  image("/figures/src/fig_cast.svg", width: 100%),
   caption: [
-    One call under the model-card recipe: a prefill pass and nine decode steps.
-    The label is fixed by the end of the first step, so the rest is unused.
+    The read itself: at the last position the `lm_head` gives a distribution over the whole vocabulary, and we keep the three label tokens and renormalize to get $P(y mid x)$.
   ],
 )
 
-Line the path up against the one read, and three pieces of unused work fall out.
-We need the distribution at one position; the decode loop computes nine.
-We need three logits; the head projects every position onto all 150,000 tokens.
-We send the same fixed prompt every call; the model re-reads it from scratch each time.
-Three tricks remove them, one each.
+This means a much smaller multiplication and an updated version of
+@eq-disc, the classification head really shall be three rows of the `lm_head` all along if we only care about the classification.
 
-= Three tricks
+#figure(
+  image("/figures/output/fig_l2.svg", width: 100%),
+  caption: [
+    The optimized read (L1 + L2): the forced `Safety: ` prefix, one forward pass, and the `lm_head` run at the last position only.
+    The projections at every other position, dashed, are the work L2 skips; the decode loop, gone, is the work L1 skips.
+  ],
+)
 
-Here is the part that should look familiar.
-Stopping a decode early, reading the logits at one position, reusing a fixed prefix's cache: these are everyday moves for serving a language model.
-A generative classifier is a language model being served, so it gets all three with no extra work.
-A team that treats the safety model as a black box, like an older classifier, pays for the full generation anyway, which on this model is about five times the cost it needs.
+== L3: KV cache
 
-== L1: stop decoding
+Now this is the usual game, we can cache the KVs for much of the system prompt.
+This should need no explanation. It does not even need one more data copy but just makes one persistently in memory and that would work. #sidenote[The real layout is a system-prompt head, then the user text, then a system-prompt tail and the forced `Safety: `. Only the head is a constant prefix, so only its keys and values are cacheable; the tail sits after the variable user text and will be recomputed. The diagrams simplify this to one fixed prefix.]
 
-We read one position, so generating the rest of the string is wasted.
-
-The model was fine-tuned to always start its answer with `Safety: `, so writing that prefix ourselves changes nothing after it.
-It just skips to the token that varies.
-We append `Safety: ` to the prompt, run one forward pass, and read the next-token distribution at the last position.
-The argmax over the three label logits is the verdict.
-This is _forced decoding_: we hand the model the tokens it would have written instead of letting it write them.
-ShieldGemma's card describes the same procedure,#sidecite(<shieldgemma>) and Llama Guard describes the first-token-logit version.#sidecite(<llamaguard>)
-No decode loop: one forward pass instead of about ten.
-This is the largest saving of the three, because it removes nine of the ten passes.
-
-== L2: only the last position
-
-We read one position, so projecting the others onto the vocabulary is wasted.
-
-The head in @eq-lm is a matrix multiply of shape $[N, d] times [d, abs(cal(V))]$: project each of the $N$ positions onto 150,000 logits.
-@eq-cast reads only the last position, so we slice the hidden states from $[N, d]$ to $[1, d]$ before the projection and compute that one row.
-The other $N - 1$ projections never happen.#sidenote[In PyTorch this is `logits_to_keep=1`; in ONNX it is a slice node on the graph; llama.cpp and most runtimes already return only the last position. Narrowing the projection further, to just the three label rows, saves under a millisecond on this model, so we leave the head whole and slice only the position.]
-
-== L3: reuse the fixed prompt
-
-The system prompt, the chat template plus the policy text, is identical on every call, so its work can be reused.
-
-As the model reads the prompt, each token produces key and value vectors that later positions attend to; together these are the KV cache.
-The prompt prefix never changes, so its keys and values never change across calls, and we can compute them once and keep them.#sidenote[In practice: cache the longest prefix that is the same regardless of user content, and run the forward pass only over the variable suffix.]
-After the first call, each call pays only for the user's text, not for re-reading the policy.
-
-That is all three. Now the measurement.
+#figure(
+  image("/figures/output/fig_l3.svg", width: 100%),
+  caption: [
+    The optimized read with L3: the fixed prefix is cached, so the transformer runs over the suffix only.
+    L1 and L2 still hold, one forward pass and a single last-position `lm_head`.
+  ],
+)
 
 = Results
 
-The first question is whether the answer survives, and it does.
-On every sample the fast path returns the same verdict as the model-card path, and at fp32 the logits match.
-So the rest is about speed.
+First, correctness: the optimization should not introduce any errors, and it should be: on every sample the optimized path returns the same verdict as the model-card path, this is actually exact.
 
-The tricks change which numbers the model computes, not how each number is stored.
-So they hold on any backend and in any precision, and the savings are largest where each forward pass is expensive, which is the CPU.
-The model is Qwen3Guard-Gen-0.6B, batch one, on sixteen cores of a Kunpeng 920#sidecite(<kunpeng920>) server CPU, across three backends: PyTorch, ONNX Runtime,#sidecite(<onnxruntime>) and llama.cpp.#sidecite(<llamacpp>)
-The input is a few hundred tokens, and each number is the median of 100 timed calls.
+The tricks change how much computation is run.
+That means they hold on any backend and in any precision,
+and the savings are largest where each forward pass is expensive, which is often determined by the memory bandwidth for moving things in and out between the CPU cache and memory.
+So as long as we are using the same machine, different runtime backends should have similar speedup (the overhead of each runtime should be similar).
+
+Here we test and present the results with Qwen3Guard-Gen-0.6B, batch one inference, on sixteen cores of a Kunpeng 920 server CPU#marginnote[The work per call is small, so going past 12 cores gives diminishing returns, but I just settled with 16 cores as it seems a good and reasonable number.],
+across three backends: PyTorch, ONNX Runtime,#sidecite(<onnxruntime>) and llama.cpp.#sidecite(<llamacpp>)
+The input is a few hundred tokens, and each number is the median of 100 timed calls after basic warmups.
 
 #figure(
-  image("/assets/images/fig_ladder.svg", width: 100%),
+  image("/figures/src/fig_ladder.svg", width: 100%),
   caption: [
     The ladder on one backend (PyTorch fp32).
     The decode loop, removed by L1, is most of the cost; L2 and L3 take the rest.
@@ -200,7 +214,7 @@ The input is a few hundred tokens, and each number is the median of 100 timed ca
 
 #figure(
   table(
-    columns: (auto, auto, auto, auto, auto),
+    columns: (2fr, 1fr, 1fr, 1fr, 1fr),
     align: (left, right, right, right, right),
     table.header([backend], [L0 baseline], [+L1], [+L2], [+L3]),
     [PyTorch fp32],  [2148], [688], [555], [408],
@@ -214,14 +228,14 @@ The input is a few hundred tokens, and each number is the median of 100 timed ca
   ],
 ) <tab-ladder>
 
-The shape is the same on every backend: L1 removes most of the time, then L2 and L3 take more off.
-The three tricks alone bring PyTorch from 2148 to 408 ms, about five times faster.
-Keep the tricks but switch to a faster fp32 runtime, and ONNX reaches 253 ms, #strong[8.5 times faster] than the model-card reference, still at fp32 with identical verdicts.
+On every backend L1 removes most of the time, then L2 and L3 take more off:
+the three tricks bring PyTorch from 2148 to 408 ms, about five times faster.
+If we keep the tricks and switch to a faster fp32 runtime,
+ONNX reaches 253 ms, #strong[8.5 times faster] than the model-card reference, still at fp32 and still returning identical verdicts.
 
-== Quantization, if you can spend the accuracy
-
-Quantization is a separate lever from the three tricks, and it is the obvious next one.
-Storing the weights in 8 bits instead of 32 shrinks the model and speeds up every matrix multiply, on top of whatever tricks are already in place.
+Quantization is a separate dimension orthogonal to the three tricks, and it is the obvious next thing to try.
+Storing the weights in 8 bits instead of 32 shrinks the model and speeds up every matrix multiply,
+on top of the tricks already in place.
 
 #figure(
   table(
@@ -238,46 +252,100 @@ Storing the weights in 8 bits instead of 32 shrinks the model and speeds up ever
   ],
 ) <tab-quant>
 
-The win is real and so is the cost.
 The fp32 paths reproduce the reference verdict on every sample.
-The 8-bit paths do not: int8 agrees with fp32 on about 98 of 100 inputs, and the two it misses are borderline, near the safe/controversial line.#sidenote[Weight-only 8-bit quantization, fp32 accumulation. The drift is a fraction of a logit, enough to flip a verdict only where the top two labels were already almost tied.]
-For most uses that is a fine trade.
-If your application cannot move a single borderline label, stay at fp32 and take the 8.5#sym.times.
+The 8-bit paths do not: int8 agrees with fp32 on about 98 of 100 inputs,
+and the two it misses are borderline, near the safe/controversial line.#sidenote[Weight-only 8-bit quantization, fp32 accumulation. The drift is a fraction of a logit, enough to flip a verdict only where the top two labels were already almost tied.]
+For most uses that is a fine trade;
+where no borderline label can move, fp32 stays exact and keeps the 8.5#sym.times.
 
-= Summary
+The full results across every backend we measured are listed below.
+Here we test with two system prompt templates:
+original (the official 296-token system prompt from Qwen3Guard) and test-200 (a compressed and simplified policy prompt, about 130 tokens).
 
-A generative classifier is a language model asked to write down a label, and that one fact is the whole post.
-Its classification head is three rows of the model's own vocabulary projection, read at one position after a fixed prompt; everything past that read is unused.
-The three tricks remove it: stop decoding, read only the last position, reuse the fixed prompt.
-They hold on any backend, in any precision, and leave the output unchanged.
-Together they take a two-second CPU call down to about 250 ms, 8.5 times faster, and quantization roughly halves it again.
+#full-width-figure(
+  table(
+    columns: (auto, auto, auto, auto),
+    align: (left, left, right, right),
+    table.header([backend], [variant], [original (p50 / p99)], [test-200 (p50 / p99)]),
+    [pytorch fp32], [L0], [2148.1 / 2830.1], [875.8 / 1230.0],
+    [], [+L1 forced prefix], [687.6 / 790.8], [423.7 / 433.0],
+    [], [+L2 LM-head trimming], [554.9 / 711.0], [352.8 / 360.1],
+    [], [+L3 KV cache], [407.5 / 428.9], [310.6 / 330.1],
+    [onnx fp32], [L0], [1670.6 / 1709.6], [1277.5 / 1308.7],
+    [], [+L1 forced prefix], [598.4 / 620.2], [315.0 / 327.9],
+    [], [+L2 LM-head trimming], [485.1 / 502.8], [239.5 / 254.8],
+    [], [+L3 KV cache], [253.2 / 265.5], [147.6 / 160.7],
+    [onnx int8], [L0], [2136.3 / 2155.9], [1842.4 / 1865.4],
+    [], [+L1 forced prefix], [382.0 / 389.2], [209.1 / 215.8],
+    [], [+L2 LM-head trimming], [280.1 / 286.7], [155.6 / 161.3],
+    [], [+L3 KV cache], [163.7 / 167.9], [113.9 / 118.5],
+    [llamacpp f32 (L2 baked)], [L0], [1589.7 / 1625.2], [1239.7 / 1282.7],
+    [], [+L1 forced prefix], [719.6 / 750.6], [426.7 / 467.5],
+    [], [+L3 KV cache], [434.0 / 458.9], [317.1 / 394.1],
+    [llamacpp f32 +kernel-opt (L2 baked)], [L0], [1278.0 / 1292.5], [966.6 / 974.1],
+    [], [+L1 forced prefix], [511.9 / 523.5], [237.5 / 268.3],
+    [], [+L3 KV cache], [242.2 / 249.0], [147.8 / 156.7],
+    [llamacpp f16 (L2 baked)], [L0], [1496.6 / 1527.9], [1156.0 / 1189.0],
+    [], [+L1 forced prefix], [928.4 / 960.5], [619.9 / 652.4],
+    [], [+L3 KV cache], [653.4 / 691.0], [542.6 / 571.8],
+    [llamacpp q8_0 (L2 baked)], [L0], [643.1 / 650.9], [437.4 / 445.2],
+    [], [+L1 forced prefix], [261.2 / 273.5], [111.5 / 115.5],
+    [], [+L3 KV cache], [128.7 / 133.1], [69.8 / 74.1],
+    [rust-candle fp32], [L0], [6149.1 / 6227.9], [5205.9 / 5252.7],
+    [], [+L1 forced prefix], [1270.6 / 1346.8], [536.3 / 550.3],
+    [], [+L3 KV cache], [726.5 / 769.8], [374.1 / 388.4],
+    [ctranslate2 fp32 (L2 baked)], [L0], [#sym.dash.en], [#sym.dash.en],
+    [], [+L1 forced prefix], [1718.3 / 1780.0], [973.2 / 991.1],
+    [mnn-llm fp16 (L2 baked)], [L0], [1336.8 / 1431.6], [1037.8 / 1127.1],
+    [], [+L1 forced prefix], [571.1 / 586.7], [287.9 / 301.4],
+  ),
+  caption: [
+    The full CPU sweep on Kunpeng 920 aarch64, p50 / p99 ms, batch one, 16 threads.
+    Rows are cumulative within a backend; "(L2 baked)" means the backend already returns only the last position, so it has no separate +L2 row.
+  ],
+) <tab-full>
 
-None of this is special to safety.
-It holds whenever a generative model gives a short, fixed-shape answer: most of the generation is not part of the answer, and once you stop treating the model as a black box, the tricks to skip it are the ones you already use.
+= Wrap up
 
-= Appendix: GPU and the larger models
+Here we listed three tricks for optimizing Qwen3Guard, a generative classifier,
+that are quite simple and apparent once you look at it.
+The three tricks (forced prefix, LM-head trimming, KV cache) take a two-second CPU call down to about 250 ms,
+that is 
+8.5 times faster without quantization;
+quantization halves it further.
 
-== On a GPU, only L1 matters
+In fact, these tricks are so apparent that if we look at vLLM, perhaps all these tricks are already implemented anyway, so really, these are apparent tricks#sidenote[And indeed, vLLM implemented them].
 
-On a GPU the forced-prefix trick (L1) is still the one that matters, because the decode loop's fixed per-step cost dominates there too.
-On an RTX 3090, Qwen3Guard-Gen-0.6B with L1 runs about 29 ms p50, against 237 ms for the model-card path, at a comparable input length.
-L2 and L3 do not help on the GPU, where the vocabulary projection and prompt re-reading are cheap next to per-call overhead.
+#bibliography("refs.bib", style: "chicago-author-date")
+
+= Appendix: GPU results
+
+Additional results on GPU are presented here.
+Our main hardware is an RTX 3090.
+
+On an RTX 3090, Qwen3Guard-Gen-0.6B with L1 runs about 29 ms p50 against 237 ms for the model-card path at a comparable input length.
+L2 and L3 do not help on the GPU,
+where the vocabulary projection and prompt re-reading are cheap next to the per-call overhead.
 On CPU the opposite holds, which is why the full ladder matters there.
 
+The stage-by-stage cost at a representative input, about 369 tokens, on the 3090 makes this plain:
+prefill is about 21 ms, then nine decode steps at roughly 17 ms each.
+That decode loop is most of the default path's 237 ms, and the forced-prefix path drops it entirely,
+leaving prefill and a sub-millisecond read, about 29 ms.
+
 #figure(
-  image("/assets/images/fig1_latency_0.6b.png", width: 100%),
+  image("/figures/src/fig1_latency_0.6b.png", width: 100%),
   caption: [
     Qwen3Guard-Gen-0.6B on an RTX 3090: the model-card path against the forced-prefix path (L1), p99 latency across input lengths.
     The forced-prefix path stays under a 200 ms budget out to about 2048 input tokens.
   ],
 )
 
-== Larger models in the family
-
-The same construction works on the larger members of the family.
+The same construction works on the larger sizes:
+with the forced-prefix path, 0.6B stays under a 200 ms p99 budget up to about 2048 input tokens, 4B up to about 256, and 8B up to 128.
 
 #figure(
-  image("/assets/images/fig2_sizes_optimized.png", width: 100%),
+  image("/figures/src/fig2_sizes_optimized.png", width: 100%),
   caption: [
     The forced-prefix path across the three Qwen3Guard-Gen sizes (0.6B / 4B / 8B) on an RTX 3090.
     All three get the same trick; the 0.6B clears a 200 ms budget at the longest inputs, the larger two hit it sooner.

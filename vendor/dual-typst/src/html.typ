@@ -242,9 +242,11 @@ pre code, pre code span { color: inherit !important; background: transparent !im
             #let vendor-only = cfg.at("html-vendor-css-only", default: false)
             #if not vendor-only {
                 html.elem("style")[#_INLINE_STYLE]
-                let extra = cfg.at("html-extra-css", default: none)
-                if extra != none and extra != "" { html.elem("style")[#extra] }
             }
+            // Per-style escape hatch, applied even in vendor-css-only mode so a
+            // style can patch the vendored CSS. Emitted last to win on order.
+            #let extra = cfg.at("html-extra-css", default: none)
+            #if extra != none and extra != "" { html.elem("style")[#extra] }
         ]
         #html.elem("body")[
             #html.elem("article")[#article-body]

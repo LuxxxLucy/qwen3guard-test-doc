@@ -16,17 +16,17 @@
   <text x="628" y="76" font-family="Roboto, sans-serif" font-size="13" fill="#222222">2148 ms</text>
 
   <!-- L1 -->
-  <text x="190" y="123" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">+L1  stop decoding</text>
+  <text x="190" y="123" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">+L1  forced prefix</text>
   <rect x="200" y="108" width="134.5" height="26" fill="#2a7f7f"/>
   <text x="342" y="126" font-family="Roboto, sans-serif" font-size="13" fill="#222222">688 ms</text>
 
   <!-- L2 -->
-  <text x="190" y="173" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">+L2  last position</text>
+  <text x="190" y="173" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">+L2  LM-head trimming</text>
   <rect x="200" y="158" width="108.5" height="26" fill="#2a7f7f"/>
   <text x="316" y="176" font-family="Roboto, sans-serif" font-size="13" fill="#222222">555 ms</text>
 
   <!-- L3 -->
-  <text x="190" y="223" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">+L3  cache prompt</text>
+  <text x="190" y="223" font-family="Roboto, sans-serif" font-size="13" fill="#222222" text-anchor="end">+L3  KV cache</text>
   <rect x="200" y="208" width="79.8" height="26" fill="#2a7f7f"/>
   <text x="287" y="226" font-family="Roboto, sans-serif" font-size="13" fill="#222222">408 ms</text>
 
