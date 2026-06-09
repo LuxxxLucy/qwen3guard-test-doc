@@ -47,31 +47,31 @@
 #marginnote[Code: #link("https://github.com/LuxxxLucy/qwen3guard-test")[github.com/LuxxxLucy/qwen3guard-test]]
 
 *TL;DR*:
-So this blog happens as one of my colleagues was trying to assess the qwen3guard model#marginnote[Qwen3Guard is an (autoregressive) language model that outputs text, which is finetuned on safety corpus and reframed as a classifier.]
-for whether it is of practical merits for scanning LLM prompts (our usecase).
-The results on in-house evals seem relatively good,
+This blog happens as one of my colleagues was trying to assess the qwen3guard model#marginnote[Qwen3Guard is an (autoregressive) language model that outputs text, which is finetuned on safety corpus and reframed as a classifier.]
+for whether it (as an instance of generative classifier family) is of practical merits for scanning LLM prompts (in our usecase).
+The results on in-house evals seem relatively okay-ish,
 but then he complained that this is just too slow to be useful
 in our usecase#marginnote[He adapted the original inference snippets in the README (see #link("https://github.com/QwenLM/Qwen3Guard/blob/main/README.md#L68-L102")[here]).
 Also we do need to mention that we do not have GPUs in our usecase.
 In my experience, less than 0.8~1B model should actually run faster
 on CPU anyway so it should be fine.
 (caveat: not always, but mostly).
-]
+].
 
-I then start digging into it and found that there are some really easy opportunities,
-like maybe if you read some basics of LLM inference you shall really not miss it.#marginnote[I only started reading LLM inference recently (like 2 months ago, when I realized that even in serving the same open source models, somehow some providers can make it much faster than others).]
+So I then start digging into it and found that there are some really easy opportunities,
+like if you read some basics you shall really not miss it.#marginnote[I only started reading LLM inference recently (like 2 months ago, when I realized that even in serving the same open source models, somehow some providers can make it much faster than others).]
 But anyway I will lay down these really simple and apparent tricks here,
-and the results are pretty good: we can get about 8.5x speedup on CPU (across different runtimes and similarly in GPU as well) with the same full precision fp32 model,
+and the results are pretty good: we can get about 8.5x speedup on CPU (across different runtimes and similarly on GPU as well) with the same full precision fp32 model,
 and quantization can further halve the latency.
 
 = A classifier of text
 
 The task we consider is simple,
-we read a string of text and we want to label it as one of the 3 categories: safe, unsafe, or controversial.
+we read a string of text and we want to label it as one out of the $K$ class#marginnote[here $K = 3$, being the 3 categories of `safe`, `unsafe`, or `controversial`.].
 
 In an oversimplified textbook setting,
-this classifier would be defined as a function $f$ that takes an input $x$ and turns it into a vector of (unnormalized) scores $f(x)$ with the dimension being $K$ (here $K = 3$).
-A softmax turns the scores into a proxy of probability for each label, and the largest is the prediction:
+this classifier would be defined as a function $f$ that takes an input $x$ and turns it into a vector of (unnormalized) scores $f(x)$ with the dimension being $K$.
+A softmax turns the scores into a proxy of probability for each category, and the largest one becomes the prediction:
 
 $ p(y = k | x) = exp(f(x)_k) / (sum_(j=1)^K exp(f(x)_j)) $ <eq-disc>
 
@@ -79,28 +79,28 @@ $ p(y = k | x) = exp(f(x)_k) / (sum_(j=1)^K exp(f(x)_j)) $ <eq-disc>
 The case of a generative classifier is different though.
 As the name suggests, it uses a *generative* model of text.
 It instead re-uses an autoregressive language model,
-that takes an input string and extends it via next-token prediction so we have more text generated and concatenated in the end.
+which takes an input string and extends it via next-token prediction so we have more text generated and concatenated in the end, like `Scan Result: Safe`.
 Once the generation is done, we search the generated text,
 if the word "safe" existed in the generated text, then we label it as "safe".
-Of course, this means the model would have good prompts and finetuning so that this instruction spec is followed.
+Of course, this means the model would have good prompts and finetuning so that this particular behavior is encouraged.
 
 We need to note that several models use this recipe, such as
 Llama Guard#sidecite(<llamaguard>), ShieldGemma#sidecite(<shieldgemma>), and Qwen3Guard#sidecite(<qwen3guard>).
 I think
-the main reason for this design is that we can assume that the base model is already pretrained on a lot of language and world knowledge,
-so it has the capacity to be used as a good and robust (i.e. generalizable) classifier with just a little tuning.
+the main reason for this design is that we can assume that the base model is already pretrained on a vast amount of language and world knowledge,
+so it has the capacity to be reframed as a good and robust (i.e. generalizable) classifier with just a little tuning.
 
 One additional advantage, that makes it particularly interesting, is the user experience:
 Now we can write human language for what is considered unsafe, a.k.a in-context learning, as part of the prompt.
-This makes especially the network administrator happy as now finally in all these years they can write policies in an easy way,
+This makes especially the org administrator happy as now finally in all these years they can write policies in an easy way,
 and that this policy can also change on the fly without retraining the model, which is a huge plus.
 
 = Analysis, breakdowns and tricks
 
-So we have an autoregressive language model, reframed as a classifier.
-Now let us take a closer look at the default way of how this model is used:
+So we have an autoregressive language model, reframed as a classifier,
+now let us take a closer look at what is really computed.
 #marginnote[
-  From the hugging face readme, the default way to use the model is to call `generate()` with a prompt that includes the system prompt and the chat template, and then parse the generated text to get the verdict.
+  This is using the default code from the hugging face readme, to call `generate()` with a prompt that includes the system prompt and the chat template, and then parse the generated text to get the verdict.
 ]
 
 #block(
@@ -121,13 +121,14 @@ Now let us take a closer look at the default way of how this model is used:
   ```
 ]
 
-If we look closely enough we will understand that something is off, there is redundant computation here.
+If we look closely enough we will understand that something is off, there are redundancies.
 
 == L1: forced prefix
 
-Our first instinct is that the 
+Our first instinct is that the
 model writes `Safety: ` before the verdict anyway, so generating it is wasted work.
-In fact, this can be seen as an extreme version of constrained decoding, like we already know (and actually finetuned the model to do this), this makes the additional decoding work for generating `Safety: ` really unnecessary.
+In fact, this can be seen as an extreme version of constrained decoding, we already know (and actually finetuned the model to do) this.
+This makes the additional decoding work for generating `Safety: ` really unnecessary.
 
 We can fix it simply by enforcing this part of the text instead,
 which we call prefix enforcing.
@@ -135,35 +136,33 @@ We can simply treat it as if it is part of the input: append `Safety: ` to the p
 The entirety of the decoding step is removed and now it becomes part of the prefill.
 
 If we only want the verdict we can stop here; the `Categories:` line never needs to be decoded.
-In fact we know in real traffic, the benign samples must outnumber the malicious samples by several magnitudes, so we can even just check for `Safety: unsafe` and skip the `Categories:` line entirely (make the latter part only conditional compute).
+We know in real traffic, the benign samples must outnumber the malicious samples by several magnitudes, so we can simply just check for `Safety: unsafe` and make the `Categories:` part conditional computed.
 In this way,
 even more of the decode loop is eliminated: we need now only one forward pass instead of about ten.#sidenote[ShieldGemma's card publishes the identical recipe; Llama Guard's is the first-token-logit variant. The model would write `Safety: unsafe`, then a `Categories:` line, about nine tokens, so `generate()` runs about ten forward passes.]
 
 #figure(
   image("/figures/src/fig_timeline.svg", width: 100%),
   caption: [
-    `generate()` runs a prefill pass then nine decode steps, one forward pass each; the forced-prefix path runs one prefill and reads the verdict, since the label is fixed by the end of the first step.
+    `generate()` runs a prefill pass and then about nine decode steps, one forward pass each; the forced-prefix path runs one prefill and reads the verdict, since the label is fixed by the end of the first step.
   ],
 )
 
 
 == L2: LM-head trimming
 
-We still have more redundant computation.
-
-Here we refer to `lm_head` as the final MLP layer that projects the final embedding into the token logit space. If we have a text of length $N+1$, then this means we need to project every one of the $N$ positions onto the full 150,000-token vocabulary, but really that is not needed.
+Here we refer to `lm_head` as the final feedforward layer that projects the final embedding into the token logit space. If we have a text of length $N+1$, then this means we need to project every one of the $N$ positions onto the full 150,000-token vocabulary, but really, this is not needed.
 
 I am actually surprised to find that this is the default behavior, but then I understand that PyTorch is ultimately a framework for training and this is actually needed and makes sense.
 But in inference this is not really needed in two perspectives:
-1. first, we only care about the last position, so the projections at the other positions are wasted work. Only $1$ of the $N$ is needed#sidenote[In PyTorch this is `logits_to_keep=1`; in ONNX a slice node on the graph; llama.cpp and most runtimes already return only the last position.].
+1. first, we only care about the last position, so the projections at the other positions are wasted work. Only $1$ of the $N$ is needed#sidenote[In PyTorch this is `logits_to_keep=1`; in ONNX we need to prune the computation graph with a slice node; llama.cpp and some other runtimes already return only the last position.].
 2. Even for that one last position, we are actually only interested in the three label tokens, so projecting onto the whole vocabulary is also wasted work. Only $3$ of the $150,000$ are needed.
 
-I mean this seems really obvious and really small, but when we talk about this 0.6B model, this is really wasted compute that cannot and should not be ignored.
+I mean this seems really obvious and really small, but since it is a 0.6B model, relatively these combined could not and should not be ignored.
 
 #figure(
   image("/figures/src/fig_cast.svg", width: 100%),
   caption: [
-    The read itself: at the last position the `lm_head` gives a distribution over the whole vocabulary, and we keep the three label tokens and renormalize to get $P(y mid x)$.
+    At the last position the `lm_head` gives a distribution over the whole vocabulary logit, and we only care about the three of them and renormalize to get $P(y | x)$.
   ],
 )
 
@@ -173,15 +172,14 @@ This means a much smaller multiplication and an updated version of
 #figure(
   image("/figures/output/fig_l2.svg", width: 100%),
   caption: [
-    The optimized read (L1 + L2): the forced `Safety: ` prefix, one forward pass, and the `lm_head` run at the last position only.
-    The projections at every other position, dashed, are the work L2 skips; the decode loop, gone, is the work L1 skips.
+    The projections at every position other than the last one are skipped.
   ],
 )
 
 == L3: KV cache
 
 Now this is the usual game, we can cache the KVs for much of the system prompt.
-This should need no explanation. It does not even need one more data copy but just makes one persistently in memory and that would work. #sidenote[The real layout is a system-prompt head, then the user text, then a system-prompt tail and the forced `Safety: `. Only the head is a constant prefix, so only its keys and values are cacheable; the tail sits after the variable user text and will be recomputed. The diagrams simplify this to one fixed prefix.]
+This should need no explanation. It does not even need one more data copy as just make a persistent shared copy in memory would work. #sidenote[The real layout is a system-prompt head, then the user text, then a system-prompt tail and the forced `Safety: `. Only the head is a constant prefix, so only it is cacheable; the tail sits after the variable user text and will be recomputed. The diagrams is a over-simplification.]
 
 #figure(
   image("/figures/output/fig_l3.svg", width: 100%),
@@ -193,15 +191,14 @@ This should need no explanation. It does not even need one more data copy but ju
 
 = Results
 
-First, correctness: the optimization should not introduce any errors, and it should be: on every sample the optimized path returns the same verdict as the model-card path, this is actually exact.
+First, correctness: the optimization should not introduce any errors, and it should be: on every sample the optimized path returns the same verdict, this is actually exact.
 
 The tricks change how much computation is run.
 That means they hold on any backend and in any precision,
 and the savings are largest where each forward pass is expensive, which is often determined by the memory bandwidth for moving things in and out between the CPU cache and memory.
-So as long as we are using the same machine, different runtime backends should have similar speedup (the overhead of each runtime should be similar).
+So as long as we are using the same machine, different runtime backends should have similar speedup (the overhead of each runtime assumed to be similar as some fixed ratio plus constant).
 
-Here we test and present the results with Qwen3Guard-Gen-0.6B, batch one inference, on sixteen cores of a Kunpeng 920 server CPU#marginnote[The work per call is small, so going past 12 cores gives diminishing returns, but I just settled with 16 cores as it seems a good and reasonable number.],
-across three backends: PyTorch, ONNX Runtime,#sidecite(<onnxruntime>) and llama.cpp.#sidecite(<llamacpp>)
+Here we test and present the results with Qwen3Guard-Gen-0.6B, batch one inference, on a 16 cores Kunpeng 920 server CPU#marginnote[The work per call is small, so going past 12 cores gives diminishing returns, but I just settled with 16 cores as it seems a good and reasonable number.].
 The input is a few hundred tokens, and each number is the median of 100 timed calls after basic warmups.
 
 #figure(
@@ -211,6 +208,8 @@ The input is a few hundred tokens, and each number is the median of 100 timed ca
     The decode loop, removed by L1, is most of the cost; L2 and L3 take the rest.
   ],
 )
+
+Similar speedup can be seen across three different backends: PyTorch, ONNX#sidecite(<onnxruntime>), and llama.cpp#sidecite(<llamacpp>).
 
 #figure(
   table(
@@ -228,14 +227,13 @@ The input is a few hundred tokens, and each number is the median of 100 timed ca
   ],
 ) <tab-ladder>
 
-On every backend L1 removes most of the time, then L2 and L3 take more off:
+On every backend trick 1 (L1) removes most of the time, then L2 and L3 take more off:
 the three tricks bring PyTorch from 2148 to 408 ms, about five times faster.
 If we keep the tricks and switch to a faster fp32 runtime,
-ONNX reaches 253 ms, #strong[8.5 times faster] than the model-card reference, still at fp32 and still returning identical verdicts.
+ONNX reaches 253 ms, #strong[8.5 times faster] than the default setting PyTorch reference.
 
 Quantization is a separate dimension orthogonal to the three tricks, and it is the obvious next thing to try.
-Storing the weights in 8 bits instead of 32 shrinks the model and speeds up every matrix multiply,
-on top of the tricks already in place.
+Storing the weights in 8 bits instead of 32 shrinks the model, on top of the tricks already in place.
 
 #figure(
   table(
@@ -248,15 +246,8 @@ on top of the tricks already in place.
   ),
   caption: [
     Best fp32 path against two 8-bit paths, all with the tricks applied, p50 ms.
-    The reference is the 2148 ms model-card path.
   ],
 ) <tab-quant>
-
-The fp32 paths reproduce the reference verdict on every sample.
-The 8-bit paths do not: int8 agrees with fp32 on about 98 of 100 inputs,
-and the two it misses are borderline, near the safe/controversial line.#sidenote[Weight-only 8-bit quantization, fp32 accumulation. The drift is a fraction of a logit, enough to flip a verdict only where the top two labels were already almost tied.]
-For most uses that is a fine trade;
-where no borderline label can move, fp32 stays exact and keeps the 8.5#sym.times.
 
 The full results across every backend we measured are listed below.
 Here we test with two system prompt templates:
@@ -300,8 +291,8 @@ original (the official 296-token system prompt from Qwen3Guard) and test-200 (a 
     [], [+L1 forced prefix], [571.1 / 586.7], [287.9 / 301.4],
   ),
   caption: [
-    The full CPU sweep on Kunpeng 920 aarch64, p50 / p99 ms, batch one, 16 threads.
-    Rows are cumulative within a backend; "(L2 baked)" means the backend already returns only the last position, so it has no separate +L2 row.
+    The full result on Kunpeng 920 aarch64, p50 / p99 ms, batch one, 16 threads.
+    Rows are cumulative within a backend; "(L2 baked)" means the backend L0 already returns only the last position, so it has no separate +L2 row.
   ],
 ) <tab-full>
 
@@ -310,11 +301,11 @@ original (the official 296-token system prompt from Qwen3Guard) and test-200 (a 
 Here we listed three tricks for optimizing Qwen3Guard, a generative classifier,
 that are quite simple and apparent once you look at it.
 The three tricks (forced prefix, LM-head trimming, KV cache) take a two-second CPU call down to about 250 ms,
-that is 
+that is
 8.5 times faster without quantization;
-quantization halves it further.
+quantization would further halves it.
 
-In fact, these tricks are so apparent that if we look at vLLM, perhaps all these tricks are already implemented anyway, so really, these are apparent tricks#sidenote[And indeed, vLLM implemented them].
+In fact, these tricks are so apparent that if we look at vLLM, perhaps all these tricks are already implemented anyway#sidenote[And indeed, vLLM implemented them].
 
 #bibliography("refs.bib", style: "chicago-author-date")
 
@@ -323,7 +314,7 @@ In fact, these tricks are so apparent that if we look at vLLM, perhaps all these
 Additional results on GPU are presented here.
 Our main hardware is an RTX 3090.
 
-On an RTX 3090, Qwen3Guard-Gen-0.6B with L1 runs about 29 ms p50 against 237 ms for the model-card path at a comparable input length.
+On an RTX 3090, Qwen3Guard-Gen-0.6B with L1 runs about 29 ms p50 against 237 ms for the default setting baseline at a comparable input length.
 L2 and L3 do not help on the GPU,
 where the vocabulary projection and prompt re-reading are cheap next to the per-call overhead.
 On CPU the opposite holds, which is why the full ladder matters there.
